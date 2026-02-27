@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<title>Land Transparency Layer - Web3</title>
+
+<link
+ rel="stylesheet"
+ href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+/>
+
+<style>
+body{
+ margin:0;
+ font-family: Arial, sans-serif;
+}
+
+#map{
+ height:100vh;
+}
+
+.panel{
+ position:absolute;
+ top:10px;
+ left:10px;
+ background:white;
+ padding:15px;
+ border-radius:10px;
+ box-shadow:0 4px 12px rgba(0,0,0,0.25);
+ z-index:999;
+ width:280px;
+}
+
+button{
+ width:100%;
+ padding:8px;
+ margin-top:8px;
+ cursor:pointer;
+}
+
+input[type="range"]{
+ width:100%;
+}
+
+small{
+ word-break:break-all;
+}
+</style>
+</head>
+
+<body>
+
+<div class="panel">
+<h3>Land Transparency Layer</h3>
+
+<button onclick="connectWallet()">Connect Phantom Wallet</button>
+<div id="wallet"></div>
+
+<hr>
+
+<div id="info">
+Klik marker untuk lihat data
+</div>
+
+<hr>
+
+Filter Max Price:
+<input type="range" id="priceSlider" min="400" max="800" value="800">
+<div id="priceValue">800</div>
+
+<button onclick="recordTransaction()">
+Record to Solana Devnet
+</button>
+
+<div id="tx"></div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.js"></script>
+
+<script>
+
+/// ===============================
+/// SAMPLE DATA
+/// ===============================
+const lands = [
+ {lat:-6.402, lng:106.794, price:500, owner:"A"},
+ {lat:-6.41, lng:106.8, price:720, owner:"B"},
+ {lat:-6.395, lng:106.81, price:640, owner:"C"}
+];
+
+const mainRoad=[-6.400,106.800];
+
+/// ===============================
+/// MAP INIT
+/// ===============================
+const map = L.map('map').setView([-6.402,106.794], 13);
+
+L.tileLayer(
+'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+).addTo(map);
+
+/// ===============================
+/// COLOR FUNCTION
+/// ===============================
+function getColor(price){
+ if(price > 700) return "red";
+ if(price > 600) return "orange";
+ return "green";
+}
+
+/// ===============================
+/// DISTANCE
+/// ===============================
+function calcDistance(a,b,c,d){
+ return (map.distance([a,b],[c,d]) / 1000).toFixed(2);
+}
+
+/// ===============================
+/// MARKERS
+/// ===============================
+let selectedLand=null;
+let markers=[];
+
+function drawMarkers(limit){
+
+ markers.forEach(m=>map.removeLayer(m));
+ markers=[];
+
+ lands.forEach(land=>{
+  if(land.price <= limit){
+
+    const m=L.circleMarker([land.lat, land.lng],{
+      radius:10,
+      color:getColor(land.price),
+      fillOpacity:0.8
+    }).addTo(map);
+
+    m.on('click', ()=>{
+      selectedLand=land;
+
+      const dist=calcDistance(
+        land.lat,
+        land.lng,
+        mainRoad[0],
+        mainRoad[1]
+      );
+
+      document.getElementById("info").innerHTML=
+      `
+      <b>Location</b><br>
+      ${land.lat.toFixed(3)}, ${land.lng.toFixed(3)}<br><br>
+
+      <b>Price</b><br>
+      ${land.price} jt/m²<br><br>
+
+      <b>Owner</b><br>
+      ${land.owner}<br><br>
+
+      <b>Distance to Main Road</b><br>
+      ${dist} km
+      `;
+    });
+
+    markers.push(m);
+  }
+ });
+}
+
+drawMarkers(800);
+
+/// ===============================
+/// SLIDER
+/// ===============================
+const slider=document.getElementById("priceSlider");
+
+slider.oninput=function(){
+ document.getElementById("priceValue").innerText=this.value;
+ drawMarkers(this.value);
+};
+
+/// ===============================
+/// SHA-256 HASH
+/// ===============================
+async function generateHash(data){
+
+ const encoder=new TextEncoder();
+ const encoded=encoder.encode(data);
+
+ const hashBuffer=await crypto.subtle.digest("SHA-256", encoded);
+
+ return Array.from(new Uint8Array(hashBuffer))
+      .map(b=>b.toString(16).padStart(2,"0"))
+      .join("");
+}
+
+/// ===============================
+/// SOLANA WALLET
+/// ===============================
+let provider=null;
+let walletAddress=null;
+
+async function connectWallet(){
+
+ if("solana" in window){
+   provider=window.solana;
+
+   if(provider.isPhantom){
+     const resp=await provider.connect();
+     walletAddress=resp.publicKey.toString();
+
+     document.getElementById("wallet").innerHTML=
+     "<small>Connected:</small><br>"+walletAddress;
+   }
+ }else{
+   alert("Install Phantom Wallet dulu 🙂");
+ }
+}
+
+/// ===============================
+/// RECORD TO DEVNET
+/// ===============================
+async function recordTransaction(){
+
+ if(!selectedLand){
+   alert("Klik tanah dulu 🙂");
+   return;
+ }
+
+ if(!walletAddress){
+   alert("Connect wallet dulu");
+   return;
+ }
+
+ selectedLand.price += Math.floor(Math.random()*50);
+
+ const payload=
+  selectedLand.lat+
+  selectedLand.lng+
+  selectedLand.price+
+  Date.now();
+
+ const hash=await generateHash(payload);
+
+ const connection=new solanaWeb3.Connection(
+  solanaWeb3.clusterApiUrl("devnet")
+ );
+
+ const transaction=new solanaWeb3.Transaction().add(
+  solanaWeb3.SystemProgram.transfer({
+    fromPubkey:new solanaWeb3.PublicKey(walletAddress),
+    toPubkey:new solanaWeb3.PublicKey(walletAddress),
+    lamports:1
+  })
+ );
+
+ transaction.feePayer=new solanaWeb3.PublicKey(walletAddress);
+
+ const {blockhash}=await connection.getLatestBlockhash();
+ transaction.recentBlockhash=blockhash;
+
+ const signed=await provider.signTransaction(transaction);
+ const signature=await connection.sendRawTransaction(signed.serialize());
+
+ document.getElementById("tx").innerHTML=
+ `
+ <hr>
+ <b>Transaction Sent to Devnet</b><br><br>
+
+ <b>Signature</b><br>
+ <small>${signature}</small><br><br>
+
+ <b>SHA-256 Payload Hash</b><br>
+ <small>${hash}</small>
+ `;
+
+ drawMarkers(slider.value);
+}
+
+</script>
+</body>
+</html>
